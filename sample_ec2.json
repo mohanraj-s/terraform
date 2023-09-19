@@ -1,0 +1,273 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Backoffice S3 File Storage Gateway Instance",
+    "Parameters": {
+        "Environment": {
+            "Type": "String"
+        },
+        "InstanceName": {
+            "Description": "Backoffice S3 File Storage Gateway Instance",
+            "Type": "String",
+            "Default": "s3-storage-gateway-instance"
+        },
+        "InstanceType": {
+            "Description": "for the Windows Server to create (4 cpu, 16Gb)",
+            "Type": "String",
+            "Default": "m5.xlarge"
+        },
+        "InstanceImageId": {
+            "Type": "String",
+            "Default": ""
+        },
+        "InstanceImageIdLatest": {
+            "Description": "Systems Manager parameter value for S3 Storage gateway AMI",
+            "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+            "Default": "/aws/service/storagegateway/ami/FILE_S3/latest"
+        },
+        "KeyName": {
+            "Description": "to use for password encryption",
+            "Type": "String",
+            "Default": "mohan-eu-west-1-sandbox-kp"
+        },
+        "dmVPC": {
+            "Type": "String",
+            "Default": "vpc-017cb1051bfaae42f"
+        },
+        "PublicSubnetId1": {
+            "Type": "String",
+            "Default": "subnet-07296d5fa24b1e71a"
+        }
+    },
+    "Conditions": {
+        "HasInstanceImageId": {
+            "Fn::Not": [
+                {
+                    "Fn::Equals": [
+                        {
+                            "Ref": "InstanceImageId"
+                        },
+                        ""
+                    ]
+                }
+            ]
+        }
+    },
+    "Resources": {
+        "WindowsServer": {
+            "Type": "AWS::EC2::Instance",
+            "Properties": {
+                "ImageId": {
+                    "Fn::If": [
+                        "HasInstanceImageId",
+                        {
+                            "Ref": "InstanceImageId"
+                        },
+                        {
+                            "Ref": "InstanceImageIdLatest"
+                        }
+                    ]
+                },
+                "InstanceType": {
+                    "Ref": "InstanceType"
+                },
+                "IamInstanceProfile": {
+                    "Ref": "Ec2InstanceProfile"
+                },
+                "KeyName": {
+                    "Ref": "KeyName"
+                },
+                "BlockDeviceMappings": [
+                    {
+                        "DeviceName": "/dev/sda1",
+                        "Ebs": {
+                            "VolumeType": "gp2",
+                            "VolumeSize": "200"
+                        }
+                    }
+                ],
+                "NetworkInterfaces": [
+                    {
+                        "AssociatePublicIpAddress": "true",
+                        "DeviceIndex": "0",
+                        "GroupSet": [
+                            {
+                                "Ref": "dmSecurityGroup"
+                            }
+                        ],
+                        "SubnetId": {
+                            "Ref": "PublicSubnetId1"
+                        }
+                    }
+                ],
+                "DisableApiTermination": false,
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": {
+                            "Ref": "InstanceName"
+                        }
+                    },
+                    {
+                        "Key": "backup",
+                        "Value": "daily"
+                    }
+                ]
+            }
+        },
+        "Ec2InstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "Ec2InstanceRole"
+                    }
+                ]
+            }
+        },
+        "Ec2InstanceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "s3-storage-gateway-instance-role",
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com",
+                                    "storagegateway.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                    "arn:aws:iam::aws:policy/AmazonSSMDirectoryServiceAccess"
+                ],
+                "Policies": [
+                    {
+                        "PolicyName": "root",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Sid": "StorageGatewayPermission",
+                                    "Effect": "Allow",
+                                    "Action": "storagegateway:*",
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "iam:PassRole",
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "EC2Permission",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:DescribeTags",
+                                        "ec2:CreateTags",
+                                        "ec2:DescribeInstances",
+                                        "ec2:CreateSnapshot",
+                                        "ec2:CreateImage",
+                                        "ec2:DescribeImages"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "S3Permission",
+                                    "Effect": "Allow",
+                                    "Action": "s3:*",
+                                    "Resource": [
+                                        {
+                                            "Fn::GetAtt": [
+                                                "S3FileStorageBucket",
+                                                "Arn"
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "/",
+                                                [
+                                                    {
+                                                        "Fn::GetAtt": [
+                                                            "S3FileStorageBucket",
+                                                            "Arn"
+                                                        ]
+                                                    },
+                                                    "*"
+                                                ]
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "dmSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Workshop - Security Group for all resources",
+                "VpcId": {
+                    "Ref": "dmVPC"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "dmSecurityGroupIngress": {
+            "Type": "AWS::EC2::SecurityGroupIngress",
+            "DependsOn": "dmSecurityGroup",
+            "Properties": {
+                "GroupId": {
+                    "Ref": "dmSecurityGroup"
+                },
+                "IpProtocol": "tcp",
+                "ToPort": "2049",
+                "FromPort": "2049",
+                "SourceSecurityGroupId": {
+                    "Ref": "dmSecurityGroup"
+                }
+            }
+        },
+        "S3FileStorageBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Sub": "mohan-testing-general-121312312313"
+                },
+                "VersioningConfiguration": {
+                    "Status": "Enabled"
+                },
+                "BucketEncryption": {
+                    "ServerSideEncryptionConfiguration": [
+                        {
+                            "BucketKeyEnabled": true
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}
